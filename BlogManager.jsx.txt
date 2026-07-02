@@ -1,0 +1,437 @@
+import { useState, useMemo } from "react";
+
+// ── Design tokens ──────────────────────────────────────────────
+// Palette: deep ink navy + warm parchment + electric citrus accent
+// Type: display = "Georgia" (authoritative serif), body = system-ui
+// Signature: a live word-count ring that pulses green when post is "ready"
+
+const T = {
+  navy:    "#0F1B2D",
+  ink:     "#1C2B3A",
+  slate:   "#3A5068",
+  mist:    "#8BA3B8",
+  parch:   "#F5F0E8",
+  cream:   "#FAF7F2",
+  citrus:  "#D4FF00",
+  amber:   "#F5A623",
+  sage:    "#4CAF7D",
+  rose:    "#E05C5C",
+  white:   "#FFFFFF",
+};
+
+const STATUS_META = {
+  draft:     { label: "Draft",     color: T.mist,   bg: "#E8EFF5" },
+  review:    { label: "In Review", color: T.amber,  bg: "#FEF3DC" },
+  published: { label: "Published", color: T.sage,   bg: "#E6F7EE" },
+  scheduled: { label: "Scheduled", color: "#9B59B6", bg: "#F3E8FC" },
+};
+
+const CATEGORIES = ["All", "Tech", "Design", "Business", "Lifestyle", "Tutorial"];
+
+// ── Sample data ────────────────────────────────────────────────
+const INITIAL_POSTS = [
+  { id: 1, title: "Building Design Systems That Scale", category: "Design", status: "published", words: 2140, date: "2026-06-10", tags: ["systems", "UI", "process"], excerpt: "A practical guide to creating component libraries that grow with your team without collapsing under their own weight." },
+  { id: 2, title: "The Hidden Cost of Technical Debt", category: "Tech", status: "published", words: 1870, date: "2026-06-05", tags: ["engineering", "strategy"], excerpt: "Why deferred decisions compound like interest — and how to negotiate paydown with non-technical stakeholders." },
+  { id: 3, title: "Newsletter Growth Playbook for 2026", category: "Business", status: "review", words: 980, date: "2026-06-18", tags: ["growth", "email", "audience"], excerpt: "The channels and tactics that actually moved the needle this year, stripped of hype." },
+  { id: 4, title: "Morning Pages: A 90-Day Experiment", category: "Lifestyle", status: "draft", words: 430, date: "2026-06-21", tags: ["habits", "creativity"], excerpt: "What happened when I committed to writing three pages of stream-of-consciousness every morning before touching my phone." },
+  { id: 5, title: "Tailwind vs. CSS Modules in 2026", category: "Tutorial", status: "scheduled", words: 1650, date: "2026-06-25", tags: ["CSS", "tutorial", "comparison"], excerpt: "An honest benchmark: build time, bundle size, DX, and where each approach genuinely wins." },
+  { id: 6, title: "Micro-SaaS Without an Audience", category: "Business", status: "draft", words: 210, date: "2026-06-22", tags: ["indie", "SaaS", "bootstrapping"], excerpt: "Early notes on launching a paid tool when you're starting from zero followers and zero email list." },
+];
+
+// ── Helpers ────────────────────────────────────────────────────
+let nextId = 7;
+const newId = () => nextId++;
+const today = () => new Date().toISOString().slice(0, 10);
+const fmtDate = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+const wordCount = (text) => text.trim().split(/\s+/).filter(Boolean).length;
+
+// Ring progress SVG
+function WordRing({ words, target = 1500 }) {
+  const pct = Math.min(words / target, 1);
+  const r = 22, circ = 2 * Math.PI * r;
+  const dash = circ * pct;
+  const color = pct >= 1 ? T.sage : pct > 0.5 ? T.citrus : T.amber;
+  return (
+    <svg width="56" height="56" style={{ transform: "rotate(-90deg)" }}>
+      <circle cx="28" cy="28" r={r} fill="none" stroke="#2A3D52" strokeWidth="4" />
+      <circle cx="28" cy="28" r={r} fill="none" stroke={color} strokeWidth="4"
+        strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+        style={{ transition: "stroke-dasharray 0.4s ease, stroke 0.4s ease" }} />
+      <text x="28" y="28" textAnchor="middle" dominantBaseline="central"
+        style={{ fill: color, fontSize: 11, fontWeight: 700, transform: "rotate(90deg)", transformOrigin: "28px 28px" }}>
+        {words >= 1000 ? `${(words / 1000).toFixed(1)}k` : words}
+      </text>
+    </svg>
+  );
+}
+
+// Status badge
+function Badge({ status }) {
+  const m = STATUS_META[status];
+  return (
+    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+      color: m.color, background: m.bg, padding: "3px 8px", borderRadius: 99 }}>
+      {m.label}
+    </span>
+  );
+}
+
+// Tag chip
+function Tag({ label, onRemove }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, background: "#1C3248",
+      color: T.mist, padding: "3px 8px", borderRadius: 99, fontWeight: 600 }}>
+      {label}
+      {onRemove && (
+        <button onClick={onRemove} style={{ background: "none", border: "none", color: T.mist, cursor: "pointer",
+          padding: 0, lineHeight: 1, fontSize: 13 }}>×</button>
+      )}
+    </span>
+  );
+}
+
+// ── Post Card ──────────────────────────────────────────────────
+function PostCard({ post, onEdit, onDelete, onStatusChange }) {
+  return (
+    <div style={{ background: T.ink, borderRadius: 12, padding: "20px 22px", display: "flex",
+      gap: 18, alignItems: "flex-start", border: `1px solid #25384C`,
+      transition: "transform 0.15s, box-shadow 0.15s" }}
+      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 8px 30px rgba(0,0,0,0.35)"; }}
+      onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+
+      <WordRing words={post.words} />
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+          <Badge status={post.status} />
+          <span style={{ fontSize: 11, color: T.mist, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            {post.category}
+          </span>
+          <span style={{ fontSize: 11, color: "#4A6070", marginLeft: "auto" }}>{fmtDate(post.date)}</span>
+        </div>
+
+        <h3 style={{ margin: "0 0 6px", fontSize: 16, fontFamily: "Georgia, serif", color: T.white, lineHeight: 1.3 }}>
+          {post.title}
+        </h3>
+        <p style={{ margin: "0 0 10px", fontSize: 13, color: T.mist, lineHeight: 1.55 }}>{post.excerpt}</p>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>
+          {post.tags.map(t => <Tag key={t} label={t} />)}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => onEdit(post)} style={btnStyle("ghost")}>Edit</button>
+          <select value={post.status} onChange={e => onStatusChange(post.id, e.target.value)}
+            style={{ fontSize: 12, background: "#152030", border: "1px solid #2A3D52", color: T.mist,
+              borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>
+            {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <button onClick={() => onDelete(post.id)} style={{ ...btnStyle("ghost"), color: T.rose, borderColor: T.rose }}>
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Editor Modal ───────────────────────────────────────────────
+function EditorModal({ post, onSave, onClose }) {
+  const isNew = !post?.id;
+  const [form, setForm] = useState(post || {
+    title: "", category: "Tech", status: "draft", excerpt: "", body: "", tags: [], date: today()
+  });
+  const [tagInput, setTagInput] = useState("");
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const bodyWords = wordCount(form.body || "");
+
+  const addTag = () => {
+    const t = tagInput.trim().toLowerCase();
+    if (t && !form.tags.includes(t)) set("tags", [...form.tags, t]);
+    setTagInput("");
+  };
+
+  const handleSave = () => {
+    if (!form.title.trim()) return;
+    onSave({ ...form, id: form.id || newId(), words: bodyWords || form.words || 0 });
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+
+      <div style={{ background: T.ink, borderRadius: 16, width: "100%", maxWidth: 680,
+        maxHeight: "90vh", overflowY: "auto", border: "1px solid #25384C" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "20px 24px", borderBottom: "1px solid #1A2F42" }}>
+          <h2 style={{ margin: 0, fontFamily: "Georgia, serif", color: T.white, fontSize: 20 }}>
+            {isNew ? "New Post" : "Edit Post"}
+          </h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <WordRing words={bodyWords} />
+            <button onClick={onClose} style={{ background: "none", border: "none", color: T.mist,
+              fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
+          </div>
+        </div>
+
+        <div style={{ padding: "24px" }}>
+          {/* Title */}
+          <label style={labelStyle}>Post Title</label>
+          <input value={form.title} onChange={e => set("title", e.target.value)}
+            placeholder="What's this post about?"
+            style={{ ...inputStyle, fontSize: 18, fontFamily: "Georgia, serif", marginBottom: 16 }} />
+
+          {/* Excerpt */}
+          <label style={labelStyle}>Excerpt</label>
+          <textarea value={form.excerpt} onChange={e => set("excerpt", e.target.value)}
+            rows={2} placeholder="One or two sentences that sell the read…"
+            style={{ ...inputStyle, resize: "vertical", marginBottom: 16 }} />
+
+          {/* Body */}
+          <label style={labelStyle}>Body <span style={{ color: T.mist, fontWeight: 400 }}>(write your draft here)</span></label>
+          <textarea value={form.body || ""} onChange={e => set("body", e.target.value)}
+            rows={8} placeholder="Start writing…"
+            style={{ ...inputStyle, resize: "vertical", lineHeight: 1.7, marginBottom: 16 }} />
+
+          {/* Row: category + status + date */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+            <div>
+              <label style={labelStyle}>Category</label>
+              <select value={form.category} onChange={e => set("category", e.target.value)} style={selectStyle}>
+                {CATEGORIES.filter(c => c !== "All").map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Status</label>
+              <select value={form.status} onChange={e => set("status", e.target.value)} style={selectStyle}>
+                {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Date</label>
+              <input type="date" value={form.date} onChange={e => set("date", e.target.value)} style={selectStyle} />
+            </div>
+          </div>
+
+          {/* Tags */}
+          <label style={labelStyle}>Tags</label>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <input value={tagInput} onChange={e => setTagInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && (e.preventDefault(), addTag())}
+              placeholder="Add a tag and press Enter"
+              style={{ ...inputStyle, flex: 1, marginBottom: 0 }} />
+            <button onClick={addTag} style={btnStyle("secondary")}>Add</button>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 24 }}>
+            {form.tags.map(t => <Tag key={t} label={t} onRemove={() => set("tags", form.tags.filter(x => x !== t))} />)}
+          </div>
+
+          {/* Actions */}
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <button onClick={onClose} style={btnStyle("ghost")}>Cancel</button>
+            <button onClick={handleSave} style={btnStyle("primary")} disabled={!form.title.trim()}>
+              {isNew ? "Create Post" : "Save Changes"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Stats bar ──────────────────────────────────────────────────
+function StatsBar({ posts }) {
+  const total   = posts.length;
+  const pub     = posts.filter(p => p.status === "published").length;
+  const words   = posts.reduce((s, p) => s + p.words, 0);
+  const drafts  = posts.filter(p => p.status === "draft").length;
+
+  const stats = [
+    { label: "Total Posts",  value: total },
+    { label: "Published",    value: pub },
+    { label: "Drafts",       value: drafts },
+    { label: "Total Words",  value: words.toLocaleString() },
+    { label: "Avg Length",   value: total ? Math.round(words / total).toLocaleString() + " w" : "—" },
+  ];
+
+  return (
+    <div style={{ display: "flex", gap: 2, background: T.ink, borderRadius: 12,
+      border: "1px solid #25384C", overflow: "hidden", marginBottom: 24 }}>
+      {stats.map((s, i) => (
+        <div key={i} style={{ flex: 1, padding: "14px 16px", textAlign: "center",
+          borderRight: i < stats.length - 1 ? "1px solid #1C2F40" : "none" }}>
+          <div style={{ fontFamily: "Georgia, serif", fontSize: 22, color: T.citrus, fontWeight: 700 }}>{s.value}</div>
+          <div style={{ fontSize: 11, color: T.mist, textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 2 }}>{s.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Main App ───────────────────────────────────────────────────
+export default function BlogManager() {
+  const [posts, setPosts]             = useState(INITIAL_POSTS);
+  const [search, setSearch]           = useState("");
+  const [filterCat, setFilterCat]     = useState("All");
+  const [filterStatus, setFilterStatus] = useState("All");
+  const [sortBy, setSortBy]           = useState("date");
+  const [editing, setEditing]         = useState(null); // null | post | "new"
+  const [view, setView]               = useState("grid"); // grid | list
+
+  const filtered = useMemo(() => {
+    let arr = [...posts];
+    if (search) arr = arr.filter(p =>
+      p.title.toLowerCase().includes(search.toLowerCase()) ||
+      p.excerpt.toLowerCase().includes(search.toLowerCase()) ||
+      p.tags.some(t => t.includes(search.toLowerCase()))
+    );
+    if (filterCat !== "All") arr = arr.filter(p => p.category === filterCat);
+    if (filterStatus !== "All") arr = arr.filter(p => p.status === filterStatus);
+    if (sortBy === "date")  arr.sort((a, b) => b.date.localeCompare(a.date));
+    if (sortBy === "words") arr.sort((a, b) => b.words - a.words);
+    if (sortBy === "title") arr.sort((a, b) => a.title.localeCompare(b.title));
+    return arr;
+  }, [posts, search, filterCat, filterStatus, sortBy]);
+
+  const savePost = (post) => {
+    setPosts(ps => ps.some(p => p.id === post.id)
+      ? ps.map(p => p.id === post.id ? post : p)
+      : [post, ...ps]);
+    setEditing(null);
+  };
+
+  const deletePost = (id) => setPosts(ps => ps.filter(p => p.id !== id));
+  const changeStatus = (id, status) => setPosts(ps => ps.map(p => p.id === id ? { ...p, status } : p));
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.navy, color: T.white, fontFamily: "system-ui, sans-serif" }}>
+      {/* ── Top nav ── */}
+      <header style={{ background: T.ink, borderBottom: "1px solid #1A2F42", padding: "0 32px",
+        display: "flex", alignItems: "center", gap: 20, height: 60, position: "sticky", top: 0, zIndex: 50 }}>
+        <div style={{ fontFamily: "Georgia, serif", fontSize: 20, fontWeight: 700, color: T.white, letterSpacing: "-0.02em" }}>
+          <span style={{ color: T.citrus }}>●</span> Byline
+        </div>
+        <nav style={{ display: "flex", gap: 24, marginLeft: 12 }}>
+          {["Posts", "Analytics", "Settings"].map(n => (
+            <span key={n} style={{ fontSize: 13, color: n === "Posts" ? T.citrus : T.mist, fontWeight: 600,
+              cursor: "pointer", paddingBottom: 2, borderBottom: n === "Posts" ? `2px solid ${T.citrus}` : "none" }}>
+              {n}
+            </span>
+          ))}
+        </nav>
+        <div style={{ marginLeft: "auto" }}>
+          <button onClick={() => setEditing("new")} style={btnStyle("primary")}>+ New Post</button>
+        </div>
+      </header>
+
+      {/* ── Main ── */}
+      <main style={{ maxWidth: 960, margin: "0 auto", padding: "32px 24px" }}>
+        <div style={{ marginBottom: 28 }}>
+          <h1 style={{ margin: "0 0 4px", fontFamily: "Georgia, serif", fontSize: 30, fontWeight: 700, color: T.white }}>
+            Your Posts
+          </h1>
+          <p style={{ margin: 0, color: T.mist, fontSize: 14 }}>{posts.length} posts · {posts.reduce((s, p) => s + p.words, 0).toLocaleString()} words written</p>
+        </div>
+
+        <StatsBar posts={posts} />
+
+        {/* Toolbar */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20, alignItems: "center" }}>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Search posts, tags…"
+            style={{ ...inputStyle, minWidth: 200, flex: 1, maxWidth: 320, marginBottom: 0, padding: "8px 14px" }} />
+
+          <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={{ ...selectStyle, marginBottom: 0 }}>
+            {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+          </select>
+
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ ...selectStyle, marginBottom: 0 }}>
+            <option value="All">All Statuses</option>
+            {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...selectStyle, marginBottom: 0 }}>
+            <option value="date">Sort: Date</option>
+            <option value="words">Sort: Length</option>
+            <option value="title">Sort: Title</option>
+          </select>
+
+          <div style={{ display: "flex", background: T.ink, borderRadius: 8, overflow: "hidden",
+            border: "1px solid #25384C", marginLeft: "auto" }}>
+            {["grid", "list"].map(v => (
+              <button key={v} onClick={() => setView(v)}
+                style={{ padding: "7px 14px", background: view === v ? T.slate : "none",
+                  border: "none", color: view === v ? T.white : T.mist, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                {v === "grid" ? "⊞" : "☰"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Post grid/list */}
+        {filtered.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "60px 0", color: T.mist }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>✏️</div>
+            <div style={{ fontFamily: "Georgia, serif", fontSize: 18, color: T.white, marginBottom: 8 }}>No posts found</div>
+            <div style={{ fontSize: 14 }}>Try a different filter or <span style={{ color: T.citrus, cursor: "pointer" }}
+              onClick={() => setEditing("new")}>write something new</span>.</div>
+          </div>
+        ) : (
+          <div style={{
+            display: view === "grid" ? "grid" : "flex",
+            gridTemplateColumns: view === "grid" ? "repeat(auto-fill, minmax(400px, 1fr))" : undefined,
+            flexDirection: view === "list" ? "column" : undefined,
+            gap: 14
+          }}>
+            {filtered.map(post => (
+              <PostCard key={post.id} post={post} onEdit={setEditing}
+                onDelete={deletePost} onStatusChange={changeStatus} />
+            ))}
+          </div>
+        )}
+      </main>
+
+      {/* ── Editor modal ── */}
+      {editing && (
+        <EditorModal
+          post={editing === "new" ? null : editing}
+          onSave={savePost}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Style helpers ──────────────────────────────────────────────
+const inputStyle = {
+  width: "100%", boxSizing: "border-box", background: "#0F1B2D",
+  border: "1px solid #25384C", borderRadius: 8, color: "#E8EFF5",
+  padding: "10px 14px", fontSize: 14, outline: "none",
+  fontFamily: "system-ui, sans-serif", marginBottom: 4,
+};
+
+const selectStyle = {
+  background: "#152030", border: "1px solid #25384C", color: "#8BA3B8",
+  borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer",
+  fontFamily: "system-ui, sans-serif",
+};
+
+const labelStyle = {
+  display: "block", fontSize: 11, fontWeight: 700, textTransform: "uppercase",
+  letterSpacing: "0.07em", color: "#5A7A94", marginBottom: 6,
+};
+
+function btnStyle(variant) {
+  const base = {
+    border: "1px solid", borderRadius: 8, padding: "8px 18px",
+    fontSize: 13, fontWeight: 700, cursor: "pointer", transition: "opacity 0.15s",
+    fontFamily: "system-ui, sans-serif",
+  };
+  if (variant === "primary")   return { ...base, background: T.citrus, color: T.navy, borderColor: T.citrus };
+  if (variant === "secondary") return { ...base, background: "#1C3248", color: T.mist, borderColor: "#25384C" };
+  return { ...base, background: "transparent", color: T.mist, borderColor: "#25384C" };
+}
